@@ -1,0 +1,171 @@
+---
+title: "Overwatch League Takeaways 2023"
+author: "Cates Smith"
+date: "2023-07-01"
+output: html_document
+---
+
+## Background
+
+This analysis was built for fun as a personal project and to demonstrate some examples of R applications for data analysis. The Overwatch League data used could have easily been replaced with numerous other data sets (obviously), but I felt like that would be a unique and interesting example.
+
+Downloaded 2023 data from website <https://overwatchleague.com/en-us/statslab>
+
+```{r, messages=FALSE, warning=FALSE,include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggrepel)
+options(dplyr.summarise.inform = FALSE)
+```
+
+```{r, messages=FALSE, warning=FALSE}
+dt <- read.csv("C:/Users/cates/R Projects/phs-2023-000000000000 (2).csv")
+```
+
+```{r, messages=FALSE, warning=FALSE}
+maps <- dt %>% group_by(map_name,map_type) %>% summarise(games = length(unique(esports_match_id))) %>% arrange(desc(games))
+```
+
+## Summary
+
+First checked the overview of which game modes were played the most frequently. Surprisingly, Push was played less than half as often as Control.
+
+```{r, messages=FALSE, warning=FALSE}
+ggplot(maps, aes(x=map_type, y=games, fill=map_type)) + geom_bar(stat = "identity", colour="black") +  coord_flip() + scale_fill_brewer(palette="Set3") + theme(legend.position = "none")
+```
+
+Looking further into the map distribution, it seems clear that Push is played less frequently as a function of team/administrative choice. There are three Hybrid maps and three Push maps, so the lower pick rate for Push is not a function of having fewer options.
+
+```{r, messages=FALSE, warning=FALSE}
+ggplot(maps, aes(x=map_name, y=games, fill=map_type)) + geom_bar(stat = "identity", colour="black") +  coord_flip() + scale_fill_brewer(palette="Set3")
+```
+
+## Hero Performance
+
+Looking at individual hero performance, there is a lot more information to process. Generally, the goal of the game is to eliminate characters on the other team by doing damage with a variety of weapons and abilities, so damage done is a good proxy for performance.
+
+Ramattra is the obvious choice for further analysis with the highest total damage of any hero all season plus many of the top 10-15 overall.
+
+```{r, messages=FALSE, warning=FALSE}
+dt %>% filter(stat_name == 'Hero Damage Done' & hero_name != 'All Heroes' & hero_name != 'Lifeweaver' & hero_name != 'Junkrat' & hero_name != 'Mercy') %>% group_by(hero_name,esports_match_id,team_name, player_name) %>% summarise(dmg_per_game = mean(amount)) %>% ggplot(aes(x=hero_name, y=dmg_per_game, fill=hero_name)) + geom_boxplot() + theme(legend.position = "none") + coord_flip()
+```
+
+Reframing the damage data differently, a few new heroes stand out that are less obvious from the boxplots. Tracer and Winston have significantly more total damage than all other heroes.
+
+Similarly, Ana and Lucio snuck into the top 10 for total damage despite relatively low per-game damage.
+
+This suggested two more lines on inquiry: 1) what would the damage totals look like when adjusted for time played and 2) how is damage distributed by hero role?
+
+```{r, messages=FALSE, warning=FALSE}
+dps <- dt %>% filter(hero_name != 'All Heroes' & stat_name == 'Hero Damage Done') %>% group_by(hero_name) %>% summarize(dmg = sum(amount)) %>% arrange(desc(dmg)) %>% slice(1:10) %>% select(hero_name)
+
+dt %>% filter(hero_name != 'All Heroes' & stat_name == 'Hero Damage Done') %>% group_by(hero_name) %>% summarize(dmg = sum(amount)) %>% arrange(desc(dmg)) %>% slice(1:10) 
+```
+
+```{r, messages=FALSE, warning=FALSE}
+dt %>% filter(stat_name == 'Hero Damage Done' & hero_name %in% dps$hero_name) %>% group_by(hero_name,esports_match_id,team_name, player_name) %>% summarise(dmg_per_game = mean(amount)) %>% ggplot(aes(x=hero_name, y=dmg_per_game, fill=hero_name)) + geom_boxplot() + theme(legend.position = "none") +geom_jitter(alpha = 0.5) + coord_flip()
+```
+
+## Ramattra
+
+First looking at the overall ratio of eliminations to damage, Ramattra is lower than expected. In terms of total damage, we already knew he was behind Tracer, Winston, and Sombra, but he is also behind each of those three in terms of conversion from Damage to Eliminations.
+
+```{r, messages=FALSE, warning=FALSE}
+
+dt_wider <- dt %>% filter(stat_name %in% c('Hero Damage Done','Eliminations') & hero_name != 'All Heroes') %>% pivot_wider(names_from="stat_name",values_from="amount")
+
+dt_wider[is.na(dt_wider)] <- 0
+
+hero_sum <- dt_wider %>% group_by(hero_name) %>% summarise(across(c(Eliminations, 'Hero Damage Done'), sum))
+
+hero_sum$`Hero Damage Done` = hero_sum$`Hero Damage Done` / 1000
+
+ggplot(hero_sum,aes(x=`Hero Damage Done`, y=Eliminations)) + geom_point() + geom_text(label=hero_sum$hero_name, nudge_x = 0.25, nudge_y = 0.25, check_overlap = T) + geom_smooth(method=lm , color="red", se=FALSE)
+```
+
+Checking highest damage games for Ramattra:
+
+```{r, messages=FALSE, warning=FALSE}
+dt %>% filter(hero_name == 'Ramattra' & stat_name == 'Hero Damage Done') %>% select(tournament_title,map_type,player_name,hero_name,amount) %>% arrange(desc(amount)) %>% slice(1:15)
+```
+
+vs Tracer/Winston/Sombra combined:
+
+```{r, messages=FALSE, warning=FALSE}
+ dt %>% filter(hero_name %in% c('Winston','Tracer','Sombra') & stat_name == 'Hero Damage Done') %>% select(tournament_title,map_type,player_name,hero_name,amount) %>% arrange(desc(amount)) %>% slice(1:15)
+```
+
+The 15th "best" Ramattra game is roughly equal to the 15th "best" for the other three heroes combined, but the top end of the distribution shows a huge disparity. As such, I wanted to compare a relative frequency distribution for these four heroes to see whether it confirms that Ramattra is more skewed towards these extreme games.
+
+```{r, messages=FALSE, warning=FALSE}
+dt %>% filter(hero_name %in% c('Ramattra','Tracer','Winston','Sombra') & stat_name == 'Hero Damage Done') %>% group_by(player_name, esports_match_id, map_name, hero_name) %>% summarise(game_damage = sum(amount)) %>% ggplot(aes(x = game_damage,fill = hero_name)) + geom_histogram(color="black") + scale_fill_manual(values = c('purple','orchid','orange','wheat')) + facet_wrap(~hero_name)
+```
+
+In conclusion, Ramattra is far from the most impactful hero in the game. That would be a reasonable inference at first glance from the hero damage summary, but the boxplot does not account for the overall distribution of each heroes' perfTankormance. Ramattra has the greatest frequency of outlier damage games, but is not consistently more effective than others, especially the three above.
+
+## Damage Adjustments
+
+With basically the same approach, I calculated damage per minute per hero on a per player, per game basis.
+
+```{r, messages=FALSE, warning=FALSE}
+hero_time_played <- dt %>% filter(stat_name == 'Time Played' & hero_name != 'All Heroes') %>% pivot_wider(names_from="stat_name",values_from="amount") %>% rename('time' = `Time Played`)
+
+hero_time_played[is.na(hero_time_played)] <- 0
+
+time_sum <- hero_time_played %>% group_by(hero_name) %>% summarise(seconds_played = sum(time))
+```
+
+Since this grain of grouping has been consistent across most of the analysis, I joined this dataframe back to the hero data with total damage that I calculated earlier. I also normalized both damage and eliminations by minutes played to account for disparities in hero pick rate.
+
+```{r, messages=FALSE, warning=FALSE}
+hero_pivot <- merge(x= hero_sum, y=time_sum, by='hero_name') %>% mutate(minutes_played = seconds_played / 60, damage_per_minute = `Hero Damage Done` / minutes_played, eliminations_per_minute = Eliminations / minutes_played )
+```
+
+Visualizing those normalized values reveals a few final conclusions. I only evaluated the top 15 heroes, in terms of total eliminations, to reduce the clutter.
+
+```{r, messages=FALSE, warning=FALSE}
+hero_pivot %>% arrange(desc(Eliminations)) %>% slice(1:15) %>% ggplot(aes(x=damage_per_minute, y=eliminations_per_minute)) + geom_point() + geom_label(aes(label = hero_name))
+```
+
+Once again, Ramattra is back as the apparent #1, but we know that is a function of the outlier performances skewing the averages upwards. Interestingly, Sojourn leads all heroes in eliminations per minute played even despite the outlier games from Ramattra.
+
+Clustered together around 700 damage/minute (0.7 \*1000) and 1.6 elims/minute are what appear to be the top tier of heroes: Sombra, Winston, Tracer, Mei, and Genji. Ironically, there is another cluster of heroes at the bottom, composed of three Support heroes: Ana, Kiriko, and Brigitte.
+
+While this does declare any hero victorious as the #1 producer of damage or eliminations, it does suggest that the best way to interpret hero data is probably in tiers, like the clusters I mentioned.
+
+## Hero Roles
+
+Since nobody would read about my R experience if I made this analysis into an exhuastive Overwatch guide, I will explain what this last section means in 1.5 sentences. Each hero belongs to one of three roles on a team, and those roles correspond to different priorities.
+
+To better understand the damage comparisons i've made thus far, I want to summarize the data at a slightly higher level by role, rather than hero.
+
+First, I will define the roles as lists of characters.
+
+```{r, messages=FALSE, warning=FALSE}
+DPS <- c('Symmetra','Tracer','Cassidy','Sombra','Mei','Bastion','Sojourn','Pharah','Hanzo','Soldier: 76','Genji','Reaper','Widowmaker','Echo','Ashe','Torbjorn','Junkrat')
+
+Support <- c('Ana','Lucio','Kiriko','Baptiste','Zenyatta','Mercy','Brigitte','Moira','Lifeweaver')
+
+Tank <- c('Sigma','Winston','Ramattra','Wrecking Ball','D.Va','Doomfist','Reinhardt','Junker Queen','Roadhog','Zarya','Orisa')
+
+```
+
+Adding this new distinction to my existing hero dataframe:
+
+```{r, messages=FALSE, warning=FALSE}
+hero_pivot <- hero_pivot %>% mutate(Role = ifelse(hero_name %in% DPS, 'DPS',ifelse(hero_name %in% Tank, 'Tank', 'Support')))
+```
+
+Checking the results:
+
+```{r, messages=FALSE, warning=FALSE}
+hero_pivot %>% ggplot(aes(x=damage_per_minute, y=eliminations_per_minute, color=Role, shape=Role)) + geom_point(size=6) + geom_text_repel(label=hero_pivot$hero_name, color="black")
+```
+
+Finally, connecting the dots (not the scatterplots) between the individual hero analysis and the broader role trends, it seems that the damage players do deal damage as the role suggests. However, tanks tend to be more efficient in converting that damage to eliminations. There is a wider disparity among support heroes than either of the other two roles, with some heroes like Moira rivaling almost all other heroes in eliminations per minute, and others like Mercy who literally do not deal damage at all.
+
+## Thank you!
+
+If you read this far into my analysis, I hope it was worth a few minutes!
